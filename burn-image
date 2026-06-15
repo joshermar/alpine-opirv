@@ -1,0 +1,106 @@
+#!/bin/bash
+set -euo pipefail
+
+[[ $# -eq 2 ]] || {
+	echo "Usage: $(basename "$0") <disk-image> <target-device>" >&2
+	exit 1
+}
+
+readonly DISK_IMG="$1"
+readonly BURN_DEV="$2"
+
+[[ "$(id -u)" -eq 0 ]] || {
+	echo "must be run as root" >&2
+	exit 1
+}
+
+error() {
+	echo "$(basename "$0"): $*" >&2
+	exit 1
+}
+
+partdev() {
+	if [[ "$1" =~ [0-9]$ ]]; then
+		echo "${1}p$2"
+	else
+		echo "${1}$2"
+	fi
+}
+
+# Try to infer the system disk and prevent the user from potentially
+# doing something catastrophically stupid (we've all been there amirite).
+oopsy_checker () {
+	local burndev_name="$(basename "$BURN_DEV")"
+
+	if [[ ! -e "/sys/class/block/$burndev_name" ]]; then
+		error "not a block device: '$BURN_DEV'"
+	fi
+
+	if [[ -e "/sys/class/block/$burndev_name/partition" ]]; then
+		error "target must be a whole disk, not a partition: '$BURN_DEV'"
+	fi
+
+	local root_part="$(basename "$(awk '$2=="/" {print $1}' /proc/mounts)")"
+	local sys_root="$(readlink "/sys/class/block/${root_part}")"
+	local sys_disk="$(basename "$(dirname "$sys_root")")"
+
+	if [[ "$burndev_name" == *"$sys_disk"* ]]; then
+		error "!!! REFUSING to burn system drive: '$BURN_DEV' !!!"
+	fi
+
+	# TODO: Maybe add a switch to allow this...
+	if [[ "$burndev_name" == "nvme"* ]]; then
+		error "!!! REFUSING to burn what looks like an internal drive !!!"
+	fi
+}
+
+burn_image() {
+	[[ -b "$BURN_DEV" ]] || error "not a block device: '$BURN_DEV'"
+
+	echo
+	echo "             !!! WARNING !!!"
+	echo "==========================================="
+	echo "You are about to ERASE ALL DATA on:"
+	echo "$BURN_DEV"
+	echo
+	echo "and replace it with:"
+	echo "$DISK_IMG"
+	echo
+	echo "To continue, type the following:"
+	echo "BURN $BURN_DEV"
+	echo
+
+	read -r -p "" CONFIRM
+	[[ "$CONFIRM" == "BURN $BURN_DEV" ]] || error "confirmation failed"
+
+	echo "Unmounting all partitions on $BURN_DEV..."
+	umount "$BURN_DEV"* 2>/dev/null || true
+
+	echo "Writing '${DISK_IMG}'..."
+	dd if="$DISK_IMG" of="$BURN_DEV" bs=4M status=progress conv=fsync
+	sync
+}
+
+grow_root() {
+	echo "Growing root partition..."
+
+	partprobe "$BURN_DEV"
+	udevadm settle
+
+	parted "$BURN_DEV" --script resizepart 2 100%
+
+	partprobe "$BURN_DEV"
+	udevadm settle
+
+	resize2fs "$(partdev "$BURN_DEV" 2)"
+}
+
+
+main() {
+	oopsy_checker
+	burn_image
+	grow_root
+	echo "🔥 Done: '$BURN_DEV'"
+}
+
+main

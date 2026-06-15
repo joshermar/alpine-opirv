@@ -1,0 +1,141 @@
+#!/bin/bash
+
+set -euo pipefail
+
+[[ "$(id -u)" -eq 0 ]] || {
+	echo "must be run as root" >&2
+	exit 1
+}
+
+cleanup() {
+	set +e
+
+	echo "Cleaning up.."
+
+	sync
+
+	mountpoint -q "${BOOT_MNT:-/dev/null}" && umount "$BOOT_MNT"
+	[[ -d "${BOOT_MNT:-/dev/null}" ]] && rmdir "$BOOT_MNT"
+
+	mountpoint -q "${ROOT_MNT:-/dev/null}" && umount "$ROOT_MNT"
+	[[ -d "${ROOT_MNT:-/dev/null}" ]] && rmdir "$ROOT_MNT"
+
+	[[ -d "${TMP_DIR:-/dev/null}" ]] && rmdir "$TMP_DIR"
+	[[ -b "${LOOP:-/dev/null}" ]] && losetup -d "$LOOP"
+}
+
+setup_image() {
+	echo "Setting up disk image..."
+
+	echo
+	truncate -s "$DISK_SIZE" "$DISK_IMAGE"
+	parted "$DISK_IMAGE" --script mklabel msdos
+	parted "$DISK_IMAGE" --script mkpart primary fat32 1MiB "$BOOT_SIZE"
+	parted "$DISK_IMAGE" --script mkpart primary ext4 "$BOOT_SIZE" 100%
+
+	LOOP=$(losetup --find --show -P "$DISK_IMAGE")
+
+	udevadm settle
+
+	local boot_dev="${LOOP}p1"
+	local root_dev="${LOOP}p2"
+
+	mkfs.vfat -F 32 -n boot "$boot_dev"
+	mkfs.ext4 -F -L root "$root_dev"
+
+	udevadm settle
+
+	TMP_DIR=$(mktemp -d)
+
+	BOOT_MNT="$TMP_DIR/boot"
+	ROOT_MNT="$TMP_DIR/root"
+
+	mkdir -p "$BOOT_MNT" "$ROOT_MNT"
+
+	mount "$boot_dev" "$BOOT_MNT"
+	mount "$root_dev" "$ROOT_MNT"
+
+	BOOT_UUID="$(blkid -c /dev/null -s UUID -o value "$boot_dev")"
+	if [[ -z "$BOOT_UUID" ]]; then
+		echo "Failed to read boot UUID from $boot_dev" >&2
+		return 1
+	fi
+
+	ROOT_UUID="$(blkid -c /dev/null -s UUID -o value "$root_dev")"
+	if [[ -z "$ROOT_UUID" ]]; then
+		echo "Failed to read root UUID from $root_dev" >&2
+		return 1
+	fi
+
+	echo
+}
+
+setup_boot() {
+	echo "Setting up boot partition..."
+
+	cp -v "$KERNEL_IMG" "$KERNEL_DTB" "$BOOT_MNT/"
+	
+	mkdir -p "$BOOT_MNT/extlinux/"
+	echo
+
+	echo "Creating '/extlinux/extlinux.conf':"
+	echo "-----------------------------------------------------------------------------------------"
+
+	cat <<-EOF | tee "$BOOT_MNT/extlinux/extlinux.conf"
+	LABEL Orange Pi RV
+	  LINUX /Image
+	  FDT /$(basename "$KERNEL_DTB")
+	  APPEND root=UUID=$ROOT_UUID $BOOT_APPEND
+	EOF
+
+	echo "-----------------------------------------------------------------------------------------"
+	echo
+}
+
+setup_root() {
+	echo "Setting up root partition..."
+
+	echo "Extracting base rootfs into '$ROOT_MNT'"
+	tar --numeric-owner -xpf "$ROOTFS_TAR" -C "$ROOT_MNT"
+	echo
+
+	echo "Creating '/etc/fstab':"
+	echo "-----------------------------------------------------------------------------------------"
+
+	cat <<-EOF | tee "$ROOT_MNT/etc/fstab"
+	UUID=$ROOT_UUID	/	ext4	defaults	0	1
+	UUID=$BOOT_UUID	/boot	vfat	defaults	0	2
+	EOF
+
+	echo "-----------------------------------------------------------------------------------------"
+	echo
+
+	echo "Installing kernel modules"
+	(
+		cd "$KERNEL_SRC/"
+		make modules_install ARCH=riscv "INSTALL_MOD_PATH=$ROOT_MNT"
+	)
+
+	echo
+}
+
+main() {
+	trap cleanup EXIT
+
+	setup_image
+	setup_boot
+	setup_root
+
+	# Give user ownership of disk image
+	if [[ -n "${SUDO_UID:-}" && -n "${SUDO_GID:-}" ]]; then
+		chown "$SUDO_UID:$SUDO_GID" "$DISK_IMAGE"
+	fi
+
+	trap - EXIT
+	cleanup
+
+	echo
+	echo "💽 Done: '$DISK_IMAGE'"
+}
+
+main
