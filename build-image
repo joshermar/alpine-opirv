@@ -67,6 +67,12 @@ setup_image() {
 		return 1
 	fi
 
+	ROOT_PARTUUID="$(blkid -c /dev/null -s PARTUUID -o value "$root_dev")"
+	if [[ -z "$ROOT_PARTUUID" ]]; then
+		echo "Failed to read root PARTUUID from $root_dev" >&2
+		return 1
+	fi
+
 	echo
 }
 
@@ -85,7 +91,7 @@ setup_boot() {
 	LABEL Orange Pi RV
 	  LINUX /Image
 	  FDT /$(basename "$KERNEL_DTB")
-	  APPEND root=UUID=$ROOT_UUID $BOOT_APPEND
+	  APPEND root=PARTUUID=${ROOT_PARTUUID} $BOOT_APPEND
 	EOF
 
 	echo "-----------------------------------------------------------------------------------------"
