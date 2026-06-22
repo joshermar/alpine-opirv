@@ -67,19 +67,13 @@ setup_image() {
 		return 1
 	fi
 
-	ROOT_PARTUUID="$(blkid -c /dev/null -s PARTUUID -o value "$root_dev")"
-	if [[ -z "$ROOT_PARTUUID" ]]; then
-		echo "Failed to read root PARTUUID from $root_dev" >&2
-		return 1
-	fi
-
 	echo
 }
 
 setup_boot() {
 	echo "Setting up boot partition..."
 
-	cp -v "$KERNEL_IMG" "$KERNEL_DTB" "$BOOT_MNT/"
+	cp -v "$KERNEL_IMG" "$KERNEL_DTB" "$INITRD_IMG" "$BOOT_MNT/"
 	
 	mkdir -p "$BOOT_MNT/extlinux/"
 	echo
@@ -88,10 +82,11 @@ setup_boot() {
 	echo "-----------------------------------------------------------------------------------------"
 
 	cat <<-EOF | tee "$BOOT_MNT/extlinux/extlinux.conf"
-	LABEL Orange Pi RV
-	  LINUX /Image
-	  FDT /$(basename "$KERNEL_DTB")
-	  APPEND root=PARTUUID=${ROOT_PARTUUID} $BOOT_APPEND
+	LABEL Alpine for Orange Pi RV
+	  LINUX /${KERNEL_IMG##*/}
+	  FDT /${KERNEL_DTB##*/}
+	  INITRD /${INITRD_IMG##*/}
+	  APPEND root=UUID=${ROOT_UUID} ${LINUX_CMD}
 	EOF
 
 	echo "-----------------------------------------------------------------------------------------"

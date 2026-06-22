@@ -1,0 +1,43 @@
+#!/bin/bash
+
+set -euo pipefail
+
+echo
+mkdir -pv "${INITRD_TMP}"
+
+echo
+echo "Setting up base..."
+
+cp -v "${INITRD_INI}" "${INITRD_TMP}/"
+tar --numeric-owner -xpvf "${INITRD_TAR}" -C "${INITRD_TMP}"
+
+echo
+echo "Copying kernel modules..."
+
+(
+	cd "${KERNEL_SRC}/"
+	make modules_install ARCH=riscv "INSTALL_MOD_PATH=${INITRD_TMP}"
+)
+
+echo
+echo "Creating CPIO archive..."
+
+fakeroot bash -c "
+cd ${INITRD_TMP}
+find . | cpio -o -H newc | gzip > ${INITRD_TMP}.cpio.gz
+"
+
+echo
+echo "Creating U-Boot initd image..."
+
+mkimage \
+  -A riscv \
+  -O linux \
+  -T ramdisk \
+  -C gzip \
+  -n initramfs \
+  -d "${INITRD_TMP}.cpio.gz" \
+  "${INITRD_IMG}"
+
+echo
+echo "📦 Done: '${INITRD_IMG}'"

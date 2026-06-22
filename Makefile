@@ -3,37 +3,49 @@ CROSS_COMPILE ?= riscv64-linux-gnu-
 JOBS          ?= $(shell nproc)
 
 # Kernel version to download and build for the image
-# Change this if you're feeling adventurous, and/or
-# are prepared to mess with the config.
 KERNEL_VER    := 7.0.10
 
-# File names and paths (don't mess with these)
-BUILD_DIR     := build
-STAGE_DIR     := staging
-KERNEL_CFG    := orangepirv_defconfig
-ROOTFS_TAR    := alpine-rootfs.tar.gz
-KERNEL_SRC    := $(STAGE_DIR)/linux-$(KERNEL_VER)
+# Input file paths (don't mess with these)
+KERNEL_CFG    := $(CURDIR)/orangepirv_defconfig
+INITRD_TAR    := $(CURDIR)/initrd/busybox-base.tar.gz
+INITRD_INI    := $(CURDIR)/initrd/init
+ROOTFS_TAR    := $(CURDIR)/alpine-rootfs.tar.gz
+
+# Output paths
+OUTPUT_DIR    := $(CURDIR)/output
+KERNEL_SRC    := $(OUTPUT_DIR)/linux-$(KERNEL_VER)
 KERNEL_IMG    := $(KERNEL_SRC)/arch/riscv/boot/Image
 KERNEL_DTB    := $(KERNEL_SRC)/arch/riscv/boot/dts/starfive/jh7110-orangepi-rv.dtb
+INITRD_TMP    := $(OUTPUT_DIR)/initrd
+INITRD_IMG    := $(OUTPUT_DIR)/uInitrd
 
 # Final disk image settings
-DISK_IMAGE    := $(BUILD_DIR)/alpine-orangepirv.img
+DISK_IMAGE    := $(OUTPUT_DIR)/alpine-orangepirv.img
 DISK_SIZE     := 500M
 BOOT_SIZE     := 100M
 
-# Extra Linux kernel parameters ('root=' is derived/added implicitly)
-BOOT_APPEND   := rootwait earlycon console=ttyS0,115200
+# Extra Linux kernel parameters ('root=' is added implicitly)
+LINUX_CMD     := earlycon console=ttyS0,115200
 
-# Variables passed to build-image script
+# build-initrd parameters
+INITR_ENV=\
+  KERNEL_SRC='$(KERNEL_SRC)' \
+  INITRD_TAR='$(INITRD_TAR)' \
+  INITRD_INI='$(INITRD_INI)' \
+  INITRD_TMP='$(INITRD_TMP)' \
+  INITRD_IMG='$(INITRD_IMG)'
+
+# build-image parameters
 BUILD_ENV=\
   ROOTFS_TAR='$(ROOTFS_TAR)' \
   KERNEL_SRC='$(KERNEL_SRC)' \
   KERNEL_IMG='$(KERNEL_IMG)' \
   KERNEL_DTB='$(KERNEL_DTB)' \
+  INITRD_IMG='$(INITRD_IMG)' \
   DISK_IMAGE='$(DISK_IMAGE)' \
   DISK_SIZE='$(DISK_SIZE)' \
   BOOT_SIZE='$(BOOT_SIZE)' \
-  BOOT_APPEND='$(BOOT_APPEND)'
+  LINUX_CMD='$(LINUX_CMD)'
 
 .PHONY: all
 all: image
@@ -71,27 +83,25 @@ test: image
 	  -drive "file=$(DISK_IMAGE),format=raw,if=virtio" \
 	  -append "console=ttyS0 root=/dev/vda2 ro"
 
+# Remove eveything but kernel
 .PHONY: clean
 clean:
-	@rm -rf build/ 
+	@find $(OUTPUT_DIR) -mindepth 1 ! -path '*linux-*' -delete
 
 .PHONY: deepclean
 deepclean:
-	@rm -rf build/ staging/
+	@rm -rf $(OUTPUT_DIR)
 
-$(BUILD_DIR):
+$(OUTPUT_DIR):
 	@mkdir -p "$@"
 
-$(STAGE_DIR):
-	@mkdir -p "$@"
-
-$(KERNEL_SRC).tar.xz: | $(STAGE_DIR)
+$(KERNEL_SRC).tar.xz: | $(OUTPUT_DIR)
 	@version='$(KERNEL_VER)'; \
 	major="$${version%%.*}"; \
 	wget "https://cdn.kernel.org/pub/linux/kernel/v$${major}.x/linux-$${version}.tar.xz" -O "$@"
 
 $(KERNEL_SRC)/.extracted: $(KERNEL_SRC).tar.xz
-	@tar -C $(STAGE_DIR) -xf $(KERNEL_SRC).tar.xz
+	@tar -C $(OUTPUT_DIR) -xf $(KERNEL_SRC).tar.xz
 	@touch "$@"
 
 $(KERNEL_SRC)/.config: $(KERNEL_SRC)/.extracted $(KERNEL_CFG)
@@ -101,5 +111,8 @@ $(KERNEL_SRC)/.config: $(KERNEL_SRC)/.extracted $(KERNEL_CFG)
 $(KERNEL_IMG) $(KERNEL_DTB) &: $(KERNEL_SRC)/.config
 	@$(MAKE) -C $(KERNEL_SRC) -j$(JOBS) ARCH=riscv CROSS_COMPILE=$(CROSS_COMPILE) Image modules dtbs
 
-$(DISK_IMAGE): Makefile build-image $(KERNEL_IMG) $(KERNEL_DTB) $(ROOTFS_TAR) | $(BUILD_DIR)
+$(INITRD_IMG): $(INITRD_TAR) $(INITRD_INI) $(KERNEL_IMG)
+	env $(INITR_ENV) ./build-initrd
+
+$(DISK_IMAGE): Makefile build-image $(KERNEL_IMG) $(KERNEL_DTB) $(INITRD_IMG) $(ROOTFS_TAR) | $(OUTPUT_DIR)
 	sudo env $(BUILD_ENV) ./build-image
