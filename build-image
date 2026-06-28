@@ -82,11 +82,28 @@ setup_boot() {
 	echo "-----------------------------------------------------------------------------------------"
 
 	cat <<-EOF | tee "$BOOT_MNT/extlinux/extlinux.conf"
-	LABEL Alpine for Orange Pi RV
+	MENU TITLE Alpine Linux for Orange Pi RV
+	PROMPT 1
+	TIMEOUT 30
+	DEFAULT normal
+
+	LABEL normal
 	  LINUX /${KERNEL_IMG##*/}
 	  FDT /${KERNEL_DTB##*/}
 	  INITRD /${INITRD_IMG##*/}
 	  APPEND root=UUID=${ROOT_UUID} ${LINUX_CMD}
+
+	LABEL rd-debug
+	  LINUX /${KERNEL_IMG##*/}
+	  FDT /${KERNEL_DTB##*/}
+	  INITRD /${INITRD_IMG##*/}
+	  APPEND root=UUID=${ROOT_UUID} ${LINUX_CMD} rd.debug
+
+	LABEL rd-break
+	  LINUX /${KERNEL_IMG##*/}
+	  FDT /${KERNEL_DTB##*/}
+	  INITRD /${INITRD_IMG##*/}
+	  APPEND root=UUID=${ROOT_UUID} ${LINUX_CMD} rd.break
 	EOF
 
 	echo "-----------------------------------------------------------------------------------------"
