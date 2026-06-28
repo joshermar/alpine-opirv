@@ -25,7 +25,7 @@ DISK_SIZE     := 500M
 BOOT_SIZE     := 100M
 
 # Extra Linux kernel parameters ('root=' is added implicitly)
-LINUX_CMD     := earlycon console=ttyS0,115200
+LINUX_CMD     := earlycon console=ttyS0,115200 modules=clk-starfive-jh7110-aon,clk-starfive-jh7110-stg,phy-jh7110-pcie,pcie-starfive,nvme
 
 # build-initrd parameters
 INITR_ENV=\
